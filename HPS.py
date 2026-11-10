@@ -4,153 +4,170 @@ import numpy as np
 import scipy.fftpack
 import sounddevice as sd
 import time
-import tkinter as tk
 
-# Calibrating Global Variables, can be changed by user
+# Parametres globaux (modifiables par l'utilisateur)
 
-sampling_rate = 48000
-analysis_window_size = 48000
-window_step = 12000
-hps_iterations = 5
-min_power_threshold = 1e-6
-standard_A_frequency = 440
-white_noise_thres = 0.2
+taux_echantillonnage  = 48000   # frequence d'echantillonnage en Hz
+taille_fenetre        = 48000   # nombre d'echantillons par fenetre d'analyse (1 seconde)
+pas_fenetre           = 12000   # decalage entre deux fenetres successives
+iterations_hps        = 5       # nombre d'iterations pour la methode HPS
+seuil_puissance_min   = 1e-6    # seuil de puissance minimale sous lequel on ignore le signal
+frequence_la_ref      = 440     # frequence de reference du La4 en Hz
+seuil_bruit_blanc     = 0.2     # seuil de suppression du bruit blanc (fraction de l'energie moyenne)
 
-analysis_window_duration  = analysis_window_size / sampling_rate
-sample_duration = 1 / sampling_rate
-frequency_resolution = sampling_rate / analysis_window_size
-octave_bands = [50, 100, 200, 400, 800, 1600, 3200, 6400, 12800, 25600]
+duree_fenetre      = taille_fenetre / taux_echantillonnage  # duree de la fenetre en secondes
+duree_echantillon  = 1 / taux_echantillonnage               # duree entre deux echantillons
+resolution_freq    = taux_echantillonnage / taille_fenetre  # resolution frequentielle en Hz/bin
+# Bandes d'octave utilisees pour le calcul de l'energie moyenne par bande
+bandes_octave = [50, 100, 200, 400, 800, 1600, 3200, 6400, 12800, 25600]
+
+# Noms des 12 notes chromatiques (gamme temperee, a partir du La)
+noms_notes = ["La", "La#", "Si", "Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#"]
 
 
-note_names = ["A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"]
-
-
-def find_closest_note(pitch):
+def note_la_plus_proche(frequence):
     """
-    Finds the closest note for a given pitch
-    parameter: pitch ----> float ----> pitch measured in hertz
+    Trouve la note chromatique la plus proche d'une frequence donnee.
 
-    returns:
-    closest_note ----> string ----> the closest note to the pitch
-    closest_pitch ----> float ----> the pitch of the closest note in hertz
+    Parametre :
+        frequence (float) : frequence mesuree en Hz
+
+    Retourne :
+        nom_note       (str)   : nom de la note la plus proche (ex. La4, Sol3)
+        frequence_note (float) : frequence theorique de cette note en Hz
     """
+    # Nombre de demi-tons depuis La4 : i = arrondi( log2(f / 440) * 12 )
+    i              = int(np.round(np.log2(frequence / frequence_la_ref) * 12))
+    nom_note       = noms_notes[i % 12] + str(4 + (i + 9) // 12)
+    frequence_note = frequence_la_ref * 2 ** (i / 12)
+    return nom_note, frequence_note
 
-    i = int(np.round(np.log2(pitch / standard_A_frequency) * 12))
-    closest_note = note_names[i % 12] + str(4 + (i + 9) // 12)
-    closest_pitch = standard_A_frequency * 2 ** (i / 12)
-    return closest_note, closest_pitch
+
+# Fenetre de Hann precalculee pour reduire les fuites spectrales
+fenetre_hann = np.hanning(taille_fenetre)
 
 
-hann_window = np.hanning(analysis_window_size)
-
-def callback(indata, frames, time, status):
+def callback(entree, frames, temps, statut):
     """
-    calling input stream from sounddevice
+    Fonction de rappel sounddevice.
+    Appelee automatiquement a chaque nouveau bloc d'echantillons audio.
     """
-    if not hasattr(callback, "window_samples"):
-        callback.window_samples = [0 for _ in range(analysis_window_size)]
+    # Initialisation du tampon circulaire (attribut statique de la fonction)
+    if not hasattr(callback, "tampon"):
+        callback.tampon = [0 for _ in range(taille_fenetre)]
 
-    if not hasattr(callback, "noteBuffer"):
-        callback.noteBuffer = ["1", "2"]
+    # Initialisation du tampon de lissage des notes (evite les affichages instables)
+    if not hasattr(callback, "historique_notes"):
+        callback.historique_notes = ["1", "2"]
 
-    if status:
-        print(status)
+    if statut:
+        print(statut)
         return
 
-    if any(indata):
-        callback.window_samples = np.concatenate(
-            (callback.window_samples, indata[:, 0])
+    if any(entree):
+        # Mise a jour du tampon circulaire par concatenation et decalage
+        callback.tampon = np.concatenate(
+            (callback.tampon, entree[:, 0])
         )
-        callback.window_samples = callback.window_samples[len(indata[:, 0]) :]
+        callback.tampon = callback.tampon[len(entree[:, 0]):]
 
-        # skip if singal is too small
-        signal_power = (np.linalg.norm(callback.window_samples, ord=2) ** 2) / len(
-            callback.window_samples
-        )
-        if signal_power < min_power_threshold:
+        # Ignorer les signaux trop faibles (silence ou bruit de fond negligeable)
+        puissance_signal = (
+            np.linalg.norm(callback.tampon, ord=2) ** 2
+        ) / len(callback.tampon)
+        if puissance_signal < seuil_puissance_min:
             os.system("cls" if os.name == "nt" else "clear")
-            print("Closest note: ....")
+            print("Note la plus proche : ....")
             return
 
-        # avoiding spectral leakage
-        hann_samples = callback.window_samples * hann_window
-        magnitude_spec = abs(scipy.fftpack.fft(hann_samples)[: len(hann_samples) // 2])
+        # Application de la fenetre de Hann pour reduire les fuites spectrales
+        signal_fenetre  = callback.tampon * fenetre_hann
+        # Calcul de la TFD et extraction du module sur la moitie utile (k < N/2)
+        spectre_magnitude = abs(
+            scipy.fftpack.fft(signal_fenetre)[: len(signal_fenetre) // 2]
+        )
 
-        # supress main humss
-        for i in range(int(62 / frequency_resolution)):
-            magnitude_spec[i] = 0
+        # Suppression des frequences inferieures a 62 Hz (hum secteur + composante continue)
+        for i in range(int(62 / resolution_freq)):
+            spectre_magnitude[i] = 0
 
-        """ • calculating average power in octave bands, if the power is below the 
-        average power, set the magnitude to zero
-        • we do this to reduce the effect of white noise, which is essential to run a
-        Harmonic Product Spectrum method"""
+        # Calcul de l'energie moyenne par bande d'octave.
+        # Les bins dont l'amplitude est inferieure au seuil sont mis a zero
+        # pour reduire l'effet du bruit blanc (necessaire avant d'appliquer la methode HPS).
+        for j in range(len(bandes_octave) - 1):
+            debut = int(bandes_octave[j]     / resolution_freq)
+            fin   = int(bandes_octave[j + 1] / resolution_freq)
+            fin   = fin if len(spectre_magnitude) > fin else len(spectre_magnitude)
+            energie_moyenne = (
+                np.linalg.norm(spectre_magnitude[debut:fin], ord=2) ** 2
+            ) / (fin - debut)
+            energie_moyenne = energie_moyenne ** 0.5
 
-        for j in range(len(octave_bands) - 1):
-            ind_start = int(octave_bands[j] / frequency_resolution)
-            ind_end = int(octave_bands[j + 1] / frequency_resolution)
-            ind_end = ind_end if len(magnitude_spec) > ind_end else len(magnitude_spec)
-            avg_energy_per_freq = (
-                np.linalg.norm(magnitude_spec[ind_start:ind_end], ord=2) ** 2
-            ) / (ind_end - ind_start)
-            avg_energy_per_freq = avg_energy_per_freq**0.5
-
-            for i in range(ind_start, ind_end):
-                magnitude_spec[i] = (
-                    magnitude_spec[i]
-                    if magnitude_spec[i] > avg_energy_per_freq * white_noise_thres
+            for i in range(debut, fin):
+                spectre_magnitude[i] = (
+                    spectre_magnitude[i]
+                    if spectre_magnitude[i] > energie_moyenne * seuil_bruit_blanc
                     else 0
                 )
 
-        # interpolate the magnitude spectrum
-        mag_spec_ipol = np.interp(
-            np.arange(0, len(magnitude_spec), 1 / hps_iterations),
-            np.arange(0, len(magnitude_spec)),
-            magnitude_spec,
+        # Interpolation du spectre pour augmenter la resolution avant la methode HPS
+        spectre_interpole = np.interp(
+            np.arange(0, len(spectre_magnitude), 1 / iterations_hps),
+            np.arange(0, len(spectre_magnitude)),
+            spectre_magnitude,
         )
-        mag_spec_ipol = mag_spec_ipol / np.linalg.norm(mag_spec_ipol, ord=2)
+        # Normalisation du spectre interpole
+        spectre_interpole = spectre_interpole / np.linalg.norm(spectre_interpole, ord=2)
 
-        hps_spec = copy.deepcopy(mag_spec_ipol)
-
-        # calculate the HPS
-        for i in range(hps_iterations):
-            tmp_hps_spec = np.multiply(
-                hps_spec[: int(np.ceil(len(mag_spec_ipol) / (i + 1)))],
-                mag_spec_ipol[:: (i + 1)],
+        # Application de la methode HPS (Harmonic Product Spectrum)
+        # Principe : multiplier le spectre par ses sous-echantillons successifs ;
+        # le fondamental ressort car ses harmoniques se superposent.
+        spectre_hps = copy.deepcopy(spectre_interpole)
+        for i in range(iterations_hps):
+            spectre_hps_temp = np.multiply(
+                spectre_hps[: int(np.ceil(len(spectre_interpole) / (i + 1)))],
+                spectre_interpole[:: (i + 1)],
             )
-            if not any(tmp_hps_spec):
+            if not any(spectre_hps_temp):
                 break
-            hps_spec = tmp_hps_spec
+            spectre_hps = spectre_hps_temp
 
-        max_ind = np.argmax(hps_spec)
-        max_freq = max_ind * (sampling_rate / analysis_window_size) / hps_iterations
+        # Extraction de la frequence fondamentale depuis le spectre HPS
+        indice_max    = np.argmax(spectre_hps)
+        frequence_max = indice_max * (taux_echantillonnage / taille_fenetre) / iterations_hps
 
-        closest_note, closest_pitch = find_closest_note(max_freq)
-        max_freq = round(max_freq, 1)
-        closest_pitch = round(closest_pitch, 1)
+        nom_note, frequence_note = note_la_plus_proche(frequence_max)
+        frequence_max  = round(frequence_max, 1)
+        frequence_note = round(frequence_note, 1)
 
-        callback.noteBuffer.insert(0, closest_note)
-        callback.noteBuffer.pop()
+        # Lissage temporel : on affiche la note seulement si les deux derniers
+        # resultats concordent (evite les affichages instables)
+        callback.historique_notes.insert(0, nom_note)
+        callback.historique_notes.pop()
 
         os.system("cls" if os.name == "nt" else "clear")
-        if callback.noteBuffer.count(callback.noteBuffer[0]) == len(
-            callback.noteBuffer
+        if callback.historique_notes.count(callback.historique_notes[0]) == len(
+            callback.historique_notes
         ):
-            print(f"Closest note: {closest_note} {max_freq}/{closest_pitch}")
-
+            print(f"Note la plus proche : {nom_note}  {frequence_max} Hz / {frequence_note} Hz")
         else:
-            print("Closest notes: ....")
+            print("Note la plus proche : ....")
 
     else:
-        print("no input")
+        print("Aucune entree audio detectee.")
 
 
 try:
-    print("Starting Harmonic Product Spectrum Tuner :guitar: 🎸...")
+    print("Demarrage de l'accordeur HPS (Harmonic Product Spectrum)...")
     with sd.InputStream(
-        channels=1, callback=callback, blocksize=window_step, samplerate=sampling_rate
+        channels=1,
+        callback=callback,
+        blocksize=pas_fenetre,
+        samplerate=taux_echantillonnage
     ):
+        # Boucle principale : on attend les evenements audio dans le callback
         while True:
             time.sleep(0.5)
 
-except Exception as e:
-    print(str(e))
+except Exception as erreur:
+    print(str(erreur))
