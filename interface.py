@@ -3,6 +3,7 @@
 interface.py — Interface graphique pour l'accordeur TFD
 Lance avec : python interface.py
 """
+import sys
 import tkinter as tk
 from tkinter import scrolledtext
 import threading
@@ -341,7 +342,6 @@ class AppAccordeur(tk.Tk):
             lbl.pack(padx=10, pady=10)
             tk.Label(
                 sous_fenetre,
-                text='Titre PDF : "Spectre frequentiel TFD — Sinus 440 Hz (La4)"',
                 font=("Helvetica", 10, "bold"), fg=BLEU, bg=BLANC
             ).pack(pady=(0, 10))
         except ImportError:

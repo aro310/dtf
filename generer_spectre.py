@@ -1,11 +1,15 @@
 import math
 import cmath
 import os
-import sys
+
+# Dossier de sortie : celui du script, qu'il soit lance directement ou via importlib
+DOSSIER_SORTIE = os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else os.getcwd()
 
 
+# ---------------------------------------------------------------------------
 # TFD manuelle (deux boucles imbriquees)
 # Formule : X[k] = somme_{n=0}^{N-1} x[n] * exp(-2j * pi * k * n / N)
+# ---------------------------------------------------------------------------
 def tfd(x):
     """Transformee de Fourier Discrete par definition — O(N^2), lien avec le cours."""
     N = len(x)
@@ -15,32 +19,33 @@ def tfd(x):
     ]
 
 
+# ---------------------------------------------------------------------------
 # Signal de test : sinus pur a 440 Hz, 1 seconde, fe = 44 100 Hz
-fe      = 44100
-N       = fe                             # nombre d'echantillons (1 seconde)
-t       = [n / fe for n in range(N)]     # axe temporel
-signal  = [math.sin(2 * math.pi * 440 * ti) for ti in t]  # sinus 440 Hz
+# ---------------------------------------------------------------------------
+fe     = 44100
+N      = fe                              # nombre d'echantillons (1 seconde)
+t      = [n / fe for n in range(N)]     # axe temporel
+signal = [math.sin(2 * math.pi * 440 * ti) for ti in t]  # sinus 440 Hz
 
 
+# ---------------------------------------------------------------------------
 # Importation de numpy et matplotlib
-try:
-    import numpy as np
-    import matplotlib
-    matplotlib.use("Agg")          # moteur sans affichage (sauvegarde fichier uniquement)
-    import matplotlib.pyplot as plt
-except ImportError:
-    print("ERREUR : numpy et matplotlib sont requis.")
-    print("Installez-les avec : pip install numpy matplotlib")
-    sys.exit(1)
+# ---------------------------------------------------------------------------
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")          # moteur sans affichage (sauvegarde fichier uniquement)
+import matplotlib.pyplot as plt
 
 
+# ---------------------------------------------------------------------------
 # Figure 1 : spectre frequentiel du sinus 440 Hz (0 a 2000 Hz)
+# ---------------------------------------------------------------------------
 sig_np  = np.array(signal, dtype=np.float64)
-fenetre = np.hanning(N)                       # fenetre de Hann pour reduire les fuites spectrales
-spectre = np.abs(np.fft.fft(sig_np * fenetre)[: N // 2])  # module, moitie utile
-freqs   = np.fft.rfftfreq(N, 1 / fe)[: N // 2]            # axe des frequences
-idx_max = int(np.argmax(spectre))             # indice du pic dominant
-f_pic   = freqs[idx_max]                      # frequence du pic en Hz
+fenetre = np.hanning(N)                                        # fenetre de Hann
+spectre = np.abs(np.fft.fft(sig_np * fenetre)[: N // 2])      # module, moitie utile
+freqs   = np.fft.rfftfreq(N, 1 / fe)[: N // 2]               # axe des frequences
+idx_max = int(np.argmax(spectre))                              # indice du pic dominant
+f_pic   = freqs[idx_max]                                       # frequence du pic en Hz
 
 fig, ax = plt.subplots(figsize=(10, 4))
 ax.plot(freqs, spectre, color="steelblue", linewidth=0.9, label="Spectre |X[k]|")
@@ -59,32 +64,30 @@ ax.set_title(
 ax.legend(fontsize=11)
 ax.grid(True, alpha=0.3)
 plt.tight_layout()
-sortie_1 = os.path.join(os.path.dirname(__file__), "spectre.png")
+sortie_1 = os.path.join(DOSSIER_SORTIE, "spectre.png")
 plt.savefig(sortie_1, dpi=150)
 plt.close()
 print(f"[OK] {sortie_1}")
 
 
+# ---------------------------------------------------------------------------
 # Figure 2 : verification tfd() manuelle vs numpy sur x = [1, 6, 8, -4, 9]
+# ---------------------------------------------------------------------------
 x_court  = [1, 6, 8, -4, 9]
-X_tfd    = tfd(x_court)                    # TFD manuelle
-X_numpy  = np.fft.fft(x_court)            # TFD numpy (reference)
+X_tfd    = tfd(x_court)                     # TFD manuelle
+X_numpy  = np.fft.fft(x_court)             # TFD numpy (reference)
 indices  = list(range(len(x_court)))
-amp_tfd  = [abs(v) for v in X_tfd]        # module de chaque coefficient (tfd manuelle)
-amp_np   = [abs(v) for v in X_numpy]      # module de chaque coefficient (numpy)
+amp_tfd  = [abs(v) for v in X_tfd]         # amplitude tfd manuelle
+amp_np   = [abs(v) for v in X_numpy]       # amplitude numpy
 
 fig2, (ax0, ax1) = plt.subplots(1, 2, figsize=(11, 4))
-largeur_barre = 0.35
+larg = 0.35
 
 # Sous-figure gauche : comparaison des amplitudes |X[k]|
-ax0.bar(
-    [i - largeur_barre / 2 for i in indices], amp_tfd,
-    width=largeur_barre, label="tfd() manuelle", color="steelblue"
-)
-ax0.bar(
-    [i + largeur_barre / 2 for i in indices], amp_np,
-    width=largeur_barre, label="np.fft.fft()", color="tomato", alpha=0.75
-)
+ax0.bar([i - larg / 2 for i in indices], amp_tfd, width=larg,
+        label="tfd() manuelle", color="steelblue")
+ax0.bar([i + larg / 2 for i in indices], amp_np,  width=larg,
+        label="np.fft.fft()", color="tomato", alpha=0.75)
 ax0.set_xticks(indices)
 ax0.set_xticklabels([f"k={k}" for k in indices])
 ax0.set_ylabel("|X[k]|")
@@ -93,16 +96,12 @@ ax0.legend()
 ax0.grid(axis="y", alpha=0.3)
 
 # Sous-figure droite : parties reelle et imaginaire de tfd()
-re_tfd = [v.real for v in X_tfd]          # partie reelle
-im_tfd = [v.imag for v in X_tfd]          # partie imaginaire
-ax1.bar(
-    [i - largeur_barre / 2 for i in indices], re_tfd,
-    width=largeur_barre, label="Partie reelle", color="steelblue"
-)
-ax1.bar(
-    [i + largeur_barre / 2 for i in indices], im_tfd,
-    width=largeur_barre, label="Partie imaginaire", color="darkorange"
-)
+re_tfd = [v.real for v in X_tfd]
+im_tfd = [v.imag for v in X_tfd]
+ax1.bar([i - larg / 2 for i in indices], re_tfd, width=larg,
+        label="Partie reelle", color="steelblue")
+ax1.bar([i + larg / 2 for i in indices], im_tfd, width=larg,
+        label="Partie imaginaire", color="darkorange")
 ax1.axhline(0, color="black", linewidth=0.8)
 ax1.set_xticks(indices)
 ax1.set_xticklabels([f"k={k}" for k in indices])
@@ -116,21 +115,23 @@ ax1.grid(axis="y", alpha=0.3)
 
 plt.suptitle("TFD manuelle — Verification sur x = [1, 6, 8, -4, 9]", fontsize=13, y=1.01)
 plt.tight_layout()
-sortie_2 = os.path.join(os.path.dirname(__file__), "spectre_tfd.png")
+sortie_2 = os.path.join(DOSSIER_SORTIE, "spectre_tfd.png")
 plt.savefig(sortie_2, dpi=150, bbox_inches="tight")
 plt.close()
 print(f"[OK] {sortie_2}")
 
 
+# ---------------------------------------------------------------------------
 # Figure 3 : schema du pipeline de traitement du signal
-from matplotlib.patches import FancyBboxPatch  # formes rectangulaires arrondies
+# ---------------------------------------------------------------------------
+from matplotlib.patches import FancyBboxPatch
 
 fig3, ax = plt.subplots(figsize=(11, 2.5))
 ax.set_xlim(0, 10)
 ax.set_ylim(0, 2)
-ax.axis("off")   # masquer les axes (schema uniquement)
+ax.axis("off")
 
-# Definition des etapes du pipeline avec leur position, label et couleur
+# Etapes du pipeline avec position, libelle et couleur de fond
 etapes = [
     (0.5, "Signal audio\nx[n]",          "lightblue"),
     (2.5, "Fenetre de Hann\nx[n]*w[n]",  "lightyellow"),
@@ -140,45 +141,35 @@ etapes = [
 ]
 
 for (x_pos, libelle, couleur) in etapes:
-    # Dessin du bloc de l'etape
-    ax.add_patch(
-        FancyBboxPatch(
-            (x_pos - 0.9, 0.4), 1.8, 1.2,
-            boxstyle="round,pad=0.1", fc=couleur, ec="gray", lw=1.2
-        )
-    )
+    ax.add_patch(FancyBboxPatch(
+        (x_pos - 0.9, 0.4), 1.8, 1.2,
+        boxstyle="round,pad=0.1", fc=couleur, ec="gray", lw=1.2
+    ))
     ax.text(
         x_pos, 1.0, libelle,
         ha="center", va="center", fontsize=9.5,
         fontweight="bold" if libelle.startswith("TFD") else "normal"
     )
 
-# Fleches de liaison entre les blocs
+# Fleches entre les blocs
 for i in range(len(etapes) - 1):
     x_debut = etapes[i][0] + 0.9
     x_fin   = etapes[i + 1][0] - 0.9
-    ax.annotate(
-        "", xy=(x_fin, 1.0), xytext=(x_debut, 1.0),
-        arrowprops=dict(arrowstyle="->", color="gray", lw=1.5)
-    )
+    ax.annotate("", xy=(x_fin, 1.0), xytext=(x_debut, 1.0),
+                arrowprops=dict(arrowstyle="->", color="gray", lw=1.5))
 
-# Formule de conversion frequence affichee sous le bloc TFD
-ax.text(
-    4.5, 0.15, "f = k * fe / N   Hz",
-    ha="center", fontsize=9, color="darkgreen", style="italic"
-)
+# Formule de conversion frequence
+ax.text(4.5, 0.15, "f = k * fe / N   Hz",
+        ha="center", fontsize=9, color="darkgreen", style="italic")
 
-ax.set_title(
-    "Pipeline de traitement du signal — Accordeur chromatique TFD",
-    fontsize=12, pad=10
-)
+ax.set_title("Pipeline de traitement du signal — Accordeur chromatique TFD",
+             fontsize=12, pad=10)
 plt.tight_layout()
-sortie_3 = os.path.join(os.path.dirname(__file__), "schema_pipeline.png")
+sortie_3 = os.path.join(DOSSIER_SORTIE, "schema_pipeline.png")
 plt.savefig(sortie_3, dpi=150, bbox_inches="tight")
 plt.close()
 print(f"[OK] {sortie_3}")
 
-# Resume des fichiers generes
 print("\nImages generees :")
 print(f"  spectre.png         -> spectre frequentiel du sinus 440 Hz")
 print(f"  spectre_tfd.png     -> verification tfd() manuelle vs numpy")
